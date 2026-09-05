@@ -59,6 +59,14 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Cafe settings (e.g. the busy flag) — any signed-in user reads it in
+    // real time so the "we're busy" banner updates live; only the backend
+    // (Admin SDK) writes it, via a staff-only endpoint.
+    match /settings/{doc} {
+      allow read: if isSignedIn();
+      allow write: if false;
+    }
+
     // Staff roster — written by the backend; never read/written by clients.
     // (Rules' exists() check above still works regardless of this.)
     match /staff/{uid} {

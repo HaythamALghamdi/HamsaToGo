@@ -11,6 +11,7 @@ ORDERS      = "orders"
 COUNTERS    = "counters"
 STAFF       = "staff"
 SAVED_CARDS = "saved_cards"
+SETTINGS    = "settings"
 
 
 def now() -> datetime:
@@ -98,6 +99,31 @@ def get_staff_fcm_tokens() -> list:
         if t:
             tokens.add(t)
     return list(tokens)
+
+
+# ─── Cafe Settings (busy toggle) ─────────────────────────────
+# A single settings/status document holds the cafe's "busy" flag. Staff
+# flip it from the dashboard (via the backend, using the Admin SDK); both
+# customers and staff read it in real time through a Firestore stream, so
+# the "we're busy, can't take orders" banner appears/disappears instantly.
+
+def get_cafe_busy() -> bool:
+    """True if staff have marked the cafe as busy (ordering paused)."""
+    db = get_firestore()
+    snap = db.collection(SETTINGS).document("status").get()
+    return bool((snap.to_dict() or {}).get("is_busy", False)) if snap.exists else False
+
+
+def set_cafe_busy(is_busy: bool, uid: str = "") -> dict:
+    """
+    Set the cafe busy flag. Written by the backend (Admin SDK) so clients
+    never write it directly — the security rules keep the doc read-only.
+    Returns the stored status.
+    """
+    db = get_firestore()
+    data = {"is_busy": bool(is_busy), "updated_at": now(), "updated_by": uid}
+    db.collection(SETTINGS).document("status").set(data)
+    return {"is_busy": bool(is_busy)}
 
 
 # ─── Saved Cards (Moyasar tokens) ────────────────────────────

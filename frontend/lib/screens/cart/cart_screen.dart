@@ -12,11 +12,19 @@ import '../../providers/auth_provider.dart';
 import '../../providers/cart_provider.dart';
 import '../../providers/locale_provider.dart';
 import '../../providers/saved_cards_provider.dart';
+import '../../providers/settings_provider.dart';
 import '../../models/order.dart';
 import '../../models/saved_card.dart';
 import '../../services/moyasar_service.dart';
 import '../../widgets/hamsa_button.dart';
 import '../../widgets/token_three_ds_webview.dart';
+
+// Shown when the cafe has paused ordering (busy). Same wording on the
+// banner, the disabled-checkout tap, and the rare mid-payment rejection.
+const _busyMsgAr =
+    'المقهى مشغول حالياً، لا يمكن استقبال الطلبات في الوقت الحالي. نعتذر، حاول لاحقاً 🙏';
+const _busyMsgEn =
+    'The cafe is busy right now and can\'t take new orders. Sorry — please try again later 🙏';
 
 class CartScreen extends ConsumerStatefulWidget {
   const CartScreen({super.key});
@@ -40,6 +48,13 @@ class _CartScreenState extends ConsumerState<CartScreen> {
     final cart = ref.read(cartProvider);
     final auth = ref.read(authProvider);
     if (cart.isEmpty || auth.user == null) return;
+
+    // Belt-and-suspenders: the CTA is already disabled while busy, but never
+    // start a payment if the cafe paused ordering.
+    if (ref.read(cafeBusyProvider).valueOrNull ?? false) {
+      _showError(_isAr ? _busyMsgAr : _busyMsgEn);
+      return;
+    }
 
     // Returning customers with saved cards pick one (or a new card) first;
     // everyone else goes straight to the card form. A failed fetch just
@@ -487,9 +502,18 @@ class _CartScreenState extends ConsumerState<CartScreen> {
       context.pushReplacement('/orders/${order.id}');
     } catch (e) {
       if (!mounted) return;
-      _showError(_isAr
-          ? 'تم الدفع لكن تعذّر إنشاء الطلب. تواصل مع الدعم.'
-          : 'Payment succeeded but the order could not be created. Please contact support.');
+      // 409 = the cafe flipped to busy between payment and order creation.
+      // The backend already refunded the charge, so tell the customer that
+      // rather than the generic "contact support" message.
+      if (e is DioException && e.response?.statusCode == 409) {
+        _showError(_isAr
+            ? 'المقهى أصبح مشغولاً، وتم استرجاع مبلغ الدفع. نعتذر، حاول لاحقاً 🙏'
+            : 'The cafe just became busy and your payment was refunded. Sorry — please try again later 🙏');
+      } else {
+        _showError(_isAr
+            ? 'تم الدفع لكن تعذّر إنشاء الطلب. تواصل مع الدعم.'
+            : 'Payment succeeded but the order could not be created. Please contact support.');
+      }
     } finally {
       if (mounted) setState(() => _isPlacing = false);
     }
@@ -511,6 +535,7 @@ class _CartScreenState extends ConsumerState<CartScreen> {
     final total = ref.watch(cartTotalProvider);
     final locale = ref.watch(localeProvider).languageCode;
     final isAr = locale == 'ar';
+    final busy = ref.watch(cafeBusyProvider).valueOrNull ?? false;
 
     return Scaffold(
       backgroundColor: HamsaColors.bgDeep,
@@ -569,6 +594,7 @@ class _CartScreenState extends ConsumerState<CartScreen> {
                 _OrderSummary(
                   total: total,
                   isAr: isAr,
+                  busy: busy,
                   isLoading: _isPlacing,
                   selectedMethod: _method,
                   onSelectMethod: (m) => setState(() => _method = m),
@@ -808,6 +834,7 @@ class _MiniQuantity extends StatelessWidget {
 class _OrderSummary extends StatelessWidget {
   final double total;
   final bool isAr;
+  final bool busy;
   final bool isLoading;
   final PaymentMethod selectedMethod;
   final ValueChanged<PaymentMethod> onSelectMethod;
@@ -818,6 +845,7 @@ class _OrderSummary extends StatelessWidget {
   const _OrderSummary({
     required this.total,
     required this.isAr,
+    required this.busy,
     required this.isLoading,
     required this.selectedMethod,
     required this.onSelectMethod,
@@ -839,6 +867,12 @@ class _OrderSummary extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          // Busy banner — cafe has paused ordering.
+          if (busy) ...[
+            _BusyBanner(isAr: isAr),
+            const SizedBox(height: 16),
+          ],
+
           // Payment method
           Align(
             alignment: isAr ? Alignment.centerRight : Alignment.centerLeft,
@@ -894,6 +928,7 @@ class _OrderSummary extends StatelessWidget {
 
           _PayCta(
             isAr: isAr,
+            busy: busy,
             isLoading: isLoading,
             method: selectedMethod,
             onPlaceOrder: onPlaceOrder,
@@ -912,6 +947,7 @@ class _OrderSummary extends StatelessWidget {
 // it triggers the OS payment sheet directly, no intermediate tap needed.
 class _PayCta extends StatelessWidget {
   final bool isAr;
+  final bool busy;
   final bool isLoading;
   final PaymentMethod method;
   final VoidCallback onPlaceOrder;
@@ -920,6 +956,7 @@ class _PayCta extends StatelessWidget {
 
   const _PayCta({
     required this.isAr,
+    required this.busy,
     required this.isLoading,
     required this.method,
     required this.onPlaceOrder,
@@ -929,6 +966,16 @@ class _PayCta extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Cafe paused ordering — show a disabled button regardless of method
+    // (this also replaces the native Apple Pay button so it can't be tapped).
+    if (busy) {
+      return HamsaButton(
+        label: isAr ? 'الطلبات متوقفة مؤقتاً' : 'Ordering paused',
+        onTap: null,
+        icon: Icons.block_rounded,
+      );
+    }
+
     if (isLoading) {
       return HamsaButton(
         label: isAr ? 'جارٍ إنشاء الطلب...' : 'Placing order...',
@@ -958,6 +1005,41 @@ class _PayCta extends StatelessWidget {
           icon: Icons.lock_outline_rounded,
         );
     }
+  }
+}
+
+// ─── Busy Banner ──────────────────────────────────────────────
+class _BusyBanner extends StatelessWidget {
+  final bool isAr;
+  const _BusyBanner({required this.isAr});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: HamsaColors.error.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: HamsaColors.error.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.pause_circle_filled_rounded,
+              color: HamsaColors.error, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              isAr ? _busyMsgAr : _busyMsgEn,
+              style: HamsaText.body(size: 13, color: HamsaColors.cream),
+              textAlign: isAr ? TextAlign.right : TextAlign.left,
+              textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 

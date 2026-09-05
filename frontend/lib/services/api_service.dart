@@ -277,6 +277,16 @@ class ApiService {
     return Order.fromJson(res.data as Map<String, dynamic>);
   }
 
+  // ─── Cafe Settings (busy toggle) ───────────────────────────
+
+  /// Staff: pause or resume ordering. Returns the new busy state. The
+  /// dashboard also listens to the Firestore `settings/status` doc, so the
+  /// UI updates from that stream regardless of this call's return value.
+  Future<bool> setCafeBusy(bool isBusy) async {
+    final res = await _dio.put('/settings/busy', data: {'is_busy': isBusy});
+    return (res.data as Map<String, dynamic>)['is_busy'] == true;
+  }
+
   // ─── Notifications ─────────────────────────────────────────
 
   Future<void> saveFcmToken({required String userId, required String token}) async {

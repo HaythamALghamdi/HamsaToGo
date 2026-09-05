@@ -9,6 +9,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/cart_provider.dart';
 import '../../providers/locale_provider.dart';
 import '../../providers/menu_provider.dart';
+import '../../providers/settings_provider.dart';
 import '../../models/menu_item.dart';
 import '../../widgets/menu_item_card.dart';
 
@@ -223,6 +224,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final categoriesAsync = ref.watch(categoriesProvider);
     final itemsAsync = ref.watch(menuItemsProvider(selectedCat));
     final cartCount = ref.watch(cartCountProvider);
+    final busy = ref.watch(cafeBusyProvider).valueOrNull ?? false;
 
     return Scaffold(
       backgroundColor: HamsaColors.bgDeep,
@@ -248,6 +250,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   onAccountTap: () => _showAccountSheet(isAr),
                 ),
               ),
+
+              // ── Busy banner ──────────────────────────────────
+              if (busy)
+                SliverToBoxAdapter(
+                  child: _HomeBusyBanner(isAr: isAr),
+                ),
 
               // ── Category Chips ───────────────────────────────
               SliverToBoxAdapter(
@@ -322,6 +330,46 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ],
       ),
     );
+  }
+}
+
+// ─── Home Busy Banner ────────────────────────────────────────
+// Shown at the top of the menu when staff have paused ordering, so
+// customers know before building a cart. Checkout is also disabled.
+class _HomeBusyBanner extends StatelessWidget {
+  final bool isAr;
+  const _HomeBusyBanner({required this.isAr});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: HamsaColors.error.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: HamsaColors.error.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.pause_circle_filled_rounded,
+              color: HamsaColors.error, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              isAr
+                  ? 'المقهى مشغول حالياً، لا يمكن استقبال الطلبات في الوقت الحالي. نعتذر، حاول لاحقاً 🙏'
+                  : 'The cafe is busy right now and can\'t take new orders. Sorry — please try again later 🙏',
+              style: HamsaText.body(size: 13, color: HamsaColors.cream),
+              textAlign: isAr ? TextAlign.right : TextAlign.left,
+              textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
+            ),
+          ),
+        ],
+      ),
+    ).animate().fadeIn(duration: 300.ms);
   }
 }
 

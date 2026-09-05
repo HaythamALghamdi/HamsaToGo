@@ -8,6 +8,7 @@ import '../../models/order.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/locale_provider.dart';
 import '../../providers/order_provider.dart';
+import '../../providers/settings_provider.dart';
 import '../../widgets/lang_toggle_button.dart';
 
 class AdminDashboardScreen extends ConsumerStatefulWidget {
@@ -108,6 +109,13 @@ class _AdminDashboardScreenState
             ),
           ),
 
+          // Busy toggle — pause / resume customer ordering
+          SliverToBoxAdapter(
+            child: const _BusyToggleCard()
+                .animate(delay: 150.ms)
+                .fadeIn(duration: 400.ms),
+          ),
+
           // Stats row
           SliverToBoxAdapter(
             child: ordersAsync.when(
@@ -194,6 +202,165 @@ class _AdminDashboardScreenState
         ],
       ),
 
+    );
+  }
+}
+
+// ─── Busy Toggle Card ────────────────────────────────────────
+// Staff pause / resume customer ordering. The switch reflects the live
+// Firestore `settings/status` flag; toggling it asks for confirmation, then
+// writes through the backend (which also refunds any order caught mid-pay).
+class _BusyToggleCard extends ConsumerStatefulWidget {
+  const _BusyToggleCard();
+
+  @override
+  ConsumerState<_BusyToggleCard> createState() => _BusyToggleCardState();
+}
+
+class _BusyToggleCardState extends ConsumerState<_BusyToggleCard> {
+  bool _saving = false;
+
+  Future<void> _toggle(bool current, bool isAr) async {
+    final turningOn = !current;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: HamsaColors.bgCard,
+        title: Text(
+          turningOn
+              ? (isAr ? 'إيقاف استقبال الطلبات؟' : 'Pause ordering?')
+              : (isAr ? 'استئناف استقبال الطلبات؟' : 'Resume ordering?'),
+          style: HamsaText.heading(size: 16, color: HamsaColors.cream),
+          textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
+        ),
+        content: Text(
+          turningOn
+              ? (isAr
+                  ? 'لن يتمكن العملاء من إرسال طلبات جديدة حتى تعيد التفعيل.'
+                  : 'Customers won\'t be able to place new orders until you resume.')
+              : (isAr
+                  ? 'سيتمكن العملاء من إرسال الطلبات مرة أخرى.'
+                  : 'Customers will be able to place orders again.'),
+          style: HamsaText.body(size: 13, color: HamsaColors.creamMuted),
+          textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(false),
+            child: Text(isAr ? 'إلغاء' : 'Cancel',
+                style: HamsaText.body(size: 13, color: HamsaColors.muted)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogCtx).pop(true),
+            child: Text(
+              turningOn
+                  ? (isAr ? 'إيقاف' : 'Pause')
+                  : (isAr ? 'استئناف' : 'Resume'),
+              style: HamsaText.body(
+                size: 13,
+                weight: FontWeight.w700,
+                color: turningOn ? HamsaColors.error : HamsaColors.greenAccent,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _saving = true);
+    try {
+      await ref.read(apiServiceProvider).setCafeBusy(turningOn);
+      // The Firestore stream drives the UI — nothing else to do on success.
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(isAr
+                ? 'تعذّر تحديث الحالة. حاول مرة أخرى.'
+                : 'Could not update status. Please try again.'),
+            backgroundColor: HamsaColors.error.withValues(alpha: 0.9),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isAr = ref.watch(localeProvider).languageCode == 'ar';
+    final busy = ref.watch(cafeBusyProvider).valueOrNull ?? false;
+    final color =
+        busy ? HamsaColors.error : HamsaColors.greenAccent;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: color.withValues(alpha: 0.3)),
+        ),
+        child: Row(
+          textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
+          children: [
+            Icon(
+              busy ? Icons.pause_circle_filled_rounded : Icons.storefront_rounded,
+              color: color,
+              size: 26,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment:
+                    isAr ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    busy
+                        ? (isAr ? 'المقهى مشغول' : 'Cafe is busy')
+                        : (isAr ? 'المقهى مفتوح' : 'Cafe is open'),
+                    style: HamsaText.body(
+                      size: 15,
+                      weight: FontWeight.w700,
+                      color: HamsaColors.cream,
+                    ),
+                    textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    busy
+                        ? (isAr ? 'الطلبات متوقفة مؤقتاً' : 'Ordering paused')
+                        : (isAr ? 'استقبال الطلبات فعّال' : 'Accepting orders'),
+                    style: HamsaText.body(size: 11, color: HamsaColors.muted),
+                    textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
+                  ),
+                ],
+              ),
+            ),
+            if (_saving)
+              const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.4,
+                  color: HamsaColors.creamMuted,
+                ),
+              )
+            else
+              Switch(
+                value: busy,
+                onChanged: (_) => _toggle(busy, isAr),
+                activeThumbColor: HamsaColors.cream,
+                activeTrackColor: HamsaColors.error,
+                inactiveThumbColor: HamsaColors.cream,
+                inactiveTrackColor: HamsaColors.greenAccent.withValues(alpha: 0.5),
+              ),
+          ],
+        ),
+      ),
     );
   }
 }

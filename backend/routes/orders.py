@@ -115,6 +115,22 @@ def place_order(order: OrderCreate, decoded: dict = Depends(require_user)):
     order.customer_id = uid
     order.customer_name = customer.get("full_name", "") or order.customer_name
 
+    # Busy guard — staff can pause new orders from the dashboard. The app
+    # disables checkout while busy, so this is the server-side safety net for
+    # the race where busy flips on mid-payment. Because the customer pays
+    # client-side before this call, refund any charge that already went
+    # through so nobody is charged for an order we won't accept.
+    if db.get_cafe_busy():
+        if order.payment_id:
+            try:
+                refund_payment(order.payment_id)
+            except Exception as e:
+                print(f"[Busy] Refund of paused order {order.payment_id} failed: {e}")
+        raise HTTPException(
+            status_code=409,
+            detail="cafe_busy: The cafe is not accepting new orders right now.",
+        )
+
     # Verify items exist + are available, and set the authoritative price.
     expected_total = price_order_items(order.items)
 
