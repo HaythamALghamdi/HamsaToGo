@@ -5,8 +5,15 @@
 	<!-- Push Notifications. Xcode promotes this to "production" automatically
 	     when exporting an App Store build, so "development" is the correct
 	     source value (matches what the Push Notifications capability writes). -->
+	<!-- production: TestFlight and App Store builds use the production APNs
+	     environment. Shipping "development" here makes iOS mint a sandbox
+	     device token, which Firebase Auth's phone verification then presents
+	     to production APNs and Apple rejects (INVALID_APP_CREDENTIAL).
+	     Local debug builds signed in Xcode need "development" instead — iOS
+	     is built on Codemagic for TestFlight/App Store, so production is the
+	     correct value here. -->
 	<key>aps-environment</key>
-	<string>development</string>
+	<string>production</string>
 	<!-- Apple Pay. Must match exactly: the App ID's assigned merchant in the
 	     Apple Developer portal, the ApplePayConfig merchantId in the app
 	     (constants.dart), and Moyasar. -->

@@ -43,6 +43,7 @@
 		     receive its silent phone-verification push (and for FCM data). -->
 		<key>UIBackgroundModes</key>
 		<array>
+			<string>fetch</string>
 			<string>remote-notification</string>
 		</array>
 		<key>UILaunchStoryboardName</key>

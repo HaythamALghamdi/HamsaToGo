@@ -2,6 +2,7 @@ import Flutter
 import UIKit
 import firebase_messaging
 import FirebaseAuth
+import FirebaseCore
 
 // Adopts the UIScene life cycle. Apple requires it for any UIKit app built
 // with the iOS 27 SDK — without it the app fails to launch ("UIScene life
@@ -32,8 +33,20 @@ import FirebaseAuth
     _ application: UIApplication,
     didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
   ) {
-    // .unknown lets the SDK detect sandbox vs production automatically.
-    Auth.auth().setAPNSToken(deviceToken, type: .unknown)
+    // State the APNs environment explicitly instead of letting the SDK infer
+    // it. Auto-detection reads the app's aps-environment entitlement, and when
+    // that disagrees with how the build was actually signed, Auth presents a
+    // token Apple rejects — the server then fails the send with
+    // INVALID_APP_CREDENTIAL (surfacing in the app as "internal-error").
+    // Firebase must be configured first; that happens from Dart, and this
+    // callback can arrive before it does.
+    if FirebaseApp.app() != nil {
+      #if DEBUG
+        Auth.auth().setAPNSToken(deviceToken, type: .sandbox)
+      #else
+        Auth.auth().setAPNSToken(deviceToken, type: .prod)
+      #endif
+    }
     super.application(
       application, didRegisterForRemoteNotificationsWithDeviceToken: deviceToken)
   }
@@ -45,7 +58,7 @@ import FirebaseAuth
   ) {
     // Auth consumes its own verification pushes; everything else falls through
     // to the default handler (FCM, etc.).
-    if Auth.auth().canHandleNotification(userInfo) {
+    if FirebaseApp.app() != nil, Auth.auth().canHandleNotification(userInfo) {
       completionHandler(.noData)
       return
     }
