@@ -1,11 +1,9 @@
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_crashlytics/firebase_crashlytics.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../../core/auth_errors.dart';
 import '../../core/theme.dart';
 import '../../core/router.dart';
 import '../../providers/auth_provider.dart';
@@ -27,7 +25,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
   // ── Step 2: OTP entry ────────────────────────────────────────
   final _otpCtrl = TextEditingController();
-  String? _verificationId;
 
   bool _step2 = false;       // true = showing OTP field
   bool _sending = false;     // waiting for SMS
@@ -51,7 +48,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     return '+966$digits';
   }
 
-  // ── Send OTP ─────────────────────────────────────────────────
+  // ── Send OTP (backend + Twilio Verify) ───────────────────────
   Future<void> _sendCode() async {
     final phone = _fullPhone;
     if (phone.length < 10) {
@@ -63,8 +60,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
     setState(() => _sending = true);
 
-    // Check the account exists BEFORE sending an OTP — otherwise an SMS
-    // is wasted (and rate limit burned) just to learn there's no account.
+    // Check the account exists BEFORE sending an OTP — don't waste an SMS
+    // (or burn the rate limit) on an unregistered number.
     try {
       final exists = await ref.read(apiServiceProvider).phoneExists(phone);
       if (!exists) {
@@ -82,59 +79,26 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         return;
       }
     } catch (_) {
-      // Backend unreachable — fall through and let the normal OTP flow
-      // proceed; the post-verify check still catches missing accounts.
+      // Backend unreachable for the pre-check — fall through; verify still
+      // returns NO_ACCOUNT if the number isn't registered.
     }
 
-    await FirebaseAuth.instance.verifyPhoneNumber(
-      phoneNumber: phone,
-      timeout: const Duration(seconds: 60),
-      verificationCompleted: (PhoneAuthCredential credential) async {
-        // Android auto-retrieval read the SMS itself. Mark the flow busy so
-        // a manual "Verify" tap can't race it — the second attempt would
-        // consume an already-used code and flash a "code expired" error.
-        if (_verifying) return;
-        setState(() => _verifying = true);
-        await _signInWithCredential(credential);
-      },
-      verificationFailed: (FirebaseAuthException e) {
-        // Record the real Firebase code/message so OTP-send failures that fall
-        // through to the generic message (e.g. iOS app-verification failures)
-        // can be diagnosed. Non-fatal — never disrupts the flow.
-        FirebaseCrashlytics.instance.recordError(
-          e,
-          null,
-          reason: 'verifyPhoneNumber failed (login): ${e.code}',
-          information: ['code=${e.code}', 'message=${e.message}'],
-          fatal: false,
-        );
-        setState(() => _sending = false);
-        // TEMP DEBUG: surface the raw Firebase code on screen (see register).
-        _showError(
-          '${friendlyAuthError(
-            e,
-            isAr: _isAr,
-            fallbackEn: 'Could not send the code. Please try again.',
-            fallbackAr: 'تعذّر إرسال الرمز. حاول مرة أخرى.',
-          )}\n[debug: ${e.code}]\nmsg: ${e.message}',
-        );
-      },
-      codeSent: (String verificationId, int? resendToken) {
-        setState(() {
-          _verificationId = verificationId;
-          _sending = false;
-          _step2 = true;
-        });
-      },
-      codeAutoRetrievalTimeout: (String verificationId) {
-        _verificationId = verificationId;
-      },
-    );
+    try {
+      await ref.read(apiServiceProvider).sendOtp(phone);
+      if (!mounted) return;
+      setState(() {
+        _sending = false;
+        _step2 = true;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _sending = false);
+      _showError(_otpSendError(e));
+    }
   }
 
   // ── Verify OTP ───────────────────────────────────────────────
   Future<void> _verifyCode() async {
-    if (_verifying) return; // auto-retrieval already signing in
     final code = _otpCtrl.text.trim();
     if (code.length != 6) {
       _showError(_isAr
@@ -142,176 +106,71 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           : 'Enter the 6-digit code');
       return;
     }
-    if (_verificationId == null) return;
 
     setState(() => _verifying = true);
-
     try {
-      final credential = PhoneAuthProvider.credential(
-        verificationId: _verificationId!,
-        smsCode: code,
-      );
-      await _signInWithCredential(credential);
-    } on FirebaseAuthException catch (e) {
-      setState(() => _verifying = false);
-      _showError(friendlyAuthError(
-        e,
-        isAr: _isAr,
-        fallbackEn: 'Could not verify the code. Please try again.',
-        fallbackAr: 'تعذّر التحقق من الرمز. حاول مرة أخرى.',
-      ));
-    }
-  }
-
-  Future<void> _signInWithCredential(PhoneAuthCredential credential) async {
-    try {
-      final userCredential =
-          await FirebaseAuth.instance.signInWithCredential(credential);
-      final idToken = await userCredential.user!.getIdToken();
-
-      await ref.read(authProvider.notifier).completePhoneAuth(
-            idToken: idToken!,
+      final data = await ref.read(apiServiceProvider).verifyOtp(
+            phone: _fullPhone,
+            code: code,
+            lang: ref.read(localeProvider).languageCode,
           );
-
+      await ref.read(authProvider.notifier).completeOtpAuth(
+            customToken: data['custom_token'] as String,
+            userJson: data['user'] as Map<String, dynamic>,
+          );
       if (!mounted) return;
-      final error = ref.read(authProvider).error;
-      if (error != null) {
+      if (ref.read(authProvider).error != null) {
         setState(() => _verifying = false);
-        if (error == 'NO_ACCOUNT') {
-          // The OTP is already verified and the Firebase session is live —
-          // don't send the user to the register screen (which would burn a
-          // SECOND SMS for the same phone). Just ask for their name and
-          // finish creating the account with the session we already have.
-          await _promptNameAndRegister();
-        } else {
-          _showError(_isAr
-              ? 'تعذّر الاتصال بالخادم. حاول مرة أخرى.'
-              : 'Could not connect to server. Please try again.');
-        }
+        _showError(_isAr
+            ? 'تعذّر تسجيل الدخول. حاول مرة أخرى.'
+            : 'Sign-in failed. Please try again.');
       }
-    } on FirebaseAuthException catch (e) {
+      // On success the router redirects automatically.
+    } on DioException catch (e) {
       if (!mounted) return;
       setState(() => _verifying = false);
-      // If the parallel auto-retrieval sign-in already succeeded, this
-      // failure is just the losing side of the race — don't surface it.
-      if (ref.read(authProvider).isAuthenticated) return;
-      _showError(friendlyAuthError(
-        e,
-        isAr: _isAr,
-        fallbackEn: 'Sign-in failed. Please try again.',
-        fallbackAr: 'تعذّر تسجيل الدخول. حاول مرة أخرى.',
-      ));
+      final status = e.response?.statusCode;
+      if (status == 404) {
+        _showError(
+          _isAr
+              ? 'لا يوجد حساب بهذا الرقم. الرجاء إنشاء حساب أولاً.'
+              : 'No account found. Please register first.',
+          action: SnackBarAction(
+            label: _isAr ? 'إنشاء حساب' : 'Register',
+            textColor: HamsaColors.bgDeep,
+            onPressed: () => context.go(_registerRoute),
+          ),
+        );
+      } else if (status == 400) {
+        _showError(_isAr
+            ? 'الرمز غير صحيح أو انتهت صلاحيته.'
+            : 'The code is incorrect or has expired.');
+      } else {
+        _showError(_isAr
+            ? 'تعذّر التحقق من الرمز. حاول مرة أخرى.'
+            : 'Could not verify the code. Please try again.');
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _verifying = false);
-      if (ref.read(authProvider).isAuthenticated) return;
       _showError(_isAr
           ? 'حدث خطأ. حاول مجدداً.'
           : 'Something went wrong. Try again.');
     }
   }
 
-  /// OTP verified but no account exists — collect a name and finish
-  /// registration with the already-verified Firebase session, so no
-  /// second OTP/SMS is ever needed.
-  Future<void> _promptNameAndRegister() async {
-    final isAr = _isAr;
-    final nameCtrl = TextEditingController();
-
-    final name = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogCtx) => AlertDialog(
-        backgroundColor: HamsaColors.bgSurface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
-          isAr ? 'أكمل إنشاء حسابك' : 'Complete your account',
-          style: HamsaText.heading(size: 20),
-          textAlign: isAr ? TextAlign.right : TextAlign.left,
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment:
-              isAr ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-          children: [
-            Text(
-              isAr
-                  ? 'تم التحقق من رقمك بنجاح. أدخل اسمك لإكمال التسجيل.'
-                  : 'Your number is verified. Enter your name to finish registering.',
-              style: HamsaText.body(size: 13, color: HamsaColors.muted),
-              textAlign: isAr ? TextAlign.right : TextAlign.left,
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: nameCtrl,
-              autofocus: true,
-              textCapitalization: TextCapitalization.words,
-              textDirection: isAr ? TextDirection.rtl : TextDirection.ltr,
-              style: isAr
-                  ? HamsaText.arabic(size: 15, color: HamsaColors.cream)
-                  : HamsaText.body(size: 15, color: HamsaColors.cream),
-              decoration: InputDecoration(
-                hintText: isAr ? 'الاسم الكامل' : 'Full name',
-                hintStyle: HamsaText.body(size: 14, color: HamsaColors.subtle),
-              ),
-            ),
-          ],
-        ),
-        actionsPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogCtx).pop(null),
-            child: Text(
-              isAr ? 'إلغاء' : 'Cancel',
-              style: HamsaText.body(size: 14, color: HamsaColors.muted),
-            ),
-          ),
-          TextButton(
-            onPressed: () =>
-                Navigator.of(dialogCtx).pop(nameCtrl.text.trim()),
-            child: Text(
-              isAr ? 'إنشاء الحساب' : 'Create account',
-              style: HamsaText.body(
-                size: 14,
-                weight: FontWeight.w700,
-                color: HamsaColors.greenAccent,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-
-    if (name == null || name.isEmpty) return; // user cancelled
-
-    setState(() => _verifying = true);
-    try {
-      // Reuse the live Firebase session — a fresh token, no new OTP.
-      final idToken =
-          await FirebaseAuth.instance.currentUser?.getIdToken();
-      if (idToken == null) throw Exception('Session expired');
-
-      await ref
-          .read(authProvider.notifier)
-          .completePhoneAuth(idToken: idToken, fullName: name);
-
-      if (!mounted) return;
-      final error = ref.read(authProvider).error;
-      if (error != null) {
-        setState(() => _verifying = false);
-        _showError(_isAr
-            ? 'تعذّر إنشاء الحساب. حاول مرة أخرى.'
-            : 'Could not create the account. Please try again.');
-      }
-      // On success the router redirects to home automatically.
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _verifying = false);
-      _showError(_isAr
-          ? 'حدث خطأ. حاول مجدداً.'
-          : 'Something went wrong. Try again.');
+  // Maps a send-OTP failure to a friendly message (429 = rate limited).
+  String _otpSendError(Object e) {
+    if (e is DioException && e.response?.statusCode == 429) {
+      return _isAr
+          ? 'محاولات كثيرة. الرجاء الانتظار قليلاً ثم المحاولة مجدداً.'
+          : 'Too many attempts. Please wait a bit and try again.';
     }
+    return _isAr
+        ? 'تعذّر إرسال الرمز. حاول مرة أخرى.'
+        : 'Could not send the code. Please try again.';
   }
+
 
   void _showError(String msg, {SnackBarAction? action}) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(

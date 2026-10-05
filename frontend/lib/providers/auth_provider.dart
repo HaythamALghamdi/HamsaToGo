@@ -130,6 +130,41 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
+  /// Complete customer sign-in/registration from a backend OTP verification
+  /// (Twilio). The backend already created/fetched the user and returned a
+  /// Firebase custom token + the user record; we sign in with the custom token
+  /// so the rest of the app has a normal Firebase session (same uid as before).
+  Future<void> completeOtpAuth({
+    required String customToken,
+    required Map<String, dynamic> userJson,
+  }) async {
+    state = state.copyWith(isLoading: true, error: null);
+    try {
+      await FirebaseAuth.instance.signInWithCustomToken(customToken);
+      final user = UserModel.fromJson(userJson);
+      await _storage.write(key: StorageKeys.userId, value: user.id);
+      state = AuthState(user: user);
+      FcmService.registerToken(_api, user.id);
+    } catch (e) {
+      state = state.copyWith(isLoading: false, error: _parseError(e));
+    }
+  }
+
+  /// Complete staff sign-in from a backend OTP verification (Twilio).
+  Future<bool> completeAdminOtpAuth(String customToken) async {
+    state = state.copyWith(isLoading: true, error: null);
+    try {
+      await FirebaseAuth.instance.signInWithCustomToken(customToken);
+      await _storage.write(key: StorageKeys.isAdmin, value: 'true');
+      state = const AuthState(isAdmin: true);
+      FcmService.registerStaffToken(_api);
+      return true;
+    } catch (e) {
+      state = state.copyWith(isLoading: false, error: _parseError(e));
+      return false;
+    }
+  }
+
   /// Staff login via Firebase phone OTP.
   /// [idToken] = Firebase ID token from a verified phone sign-in.
   Future<bool> loginAdminPhone(String idToken) async {

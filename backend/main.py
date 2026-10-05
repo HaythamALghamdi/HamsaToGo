@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 from firebase.config import init_firebase
 from services.postgres import init_db
-from routes import auth, menu, orders, notifications, cards, settings
+from routes import auth, menu, orders, notifications, cards, settings, otp
 
 load_dotenv()
 
@@ -54,6 +54,7 @@ app.include_router(orders.router)
 app.include_router(notifications.router)
 app.include_router(cards.router)
 app.include_router(settings.router)
+app.include_router(otp.router)
 
 
 # ─── Health Check ─────────────────────────────────────────────

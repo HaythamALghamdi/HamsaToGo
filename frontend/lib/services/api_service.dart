@@ -94,6 +94,45 @@ class ApiService {
     return (res.data as Map<String, dynamic>)['success'] == true;
   }
 
+  // ─── Phone OTP via backend (Twilio Verify) ─────────────────
+  // Replaces Firebase's own phone verification: the backend sends/checks the
+  // code and returns a Firebase CUSTOM TOKEN, which the app uses to sign in.
+
+  /// Ask the backend to send an SMS OTP to [phone] (E.164, +9665…).
+  Future<void> sendOtp(String phone) async {
+    await _dio.post('/auth/otp/send', data: {'phone': phone});
+  }
+
+  /// Verify a customer's OTP. Returns `{ custom_token, user }` on success.
+  /// [fullName] is required only for new users (register). A 404 with detail
+  /// `NO_ACCOUNT` means the number has no account yet.
+  Future<Map<String, dynamic>> verifyOtp({
+    required String phone,
+    required String code,
+    String? fullName,
+    String? lang,
+  }) async {
+    final res = await _dio.post('/auth/otp/verify', data: {
+      'phone': phone,
+      'code': code,
+      if (fullName != null) 'full_name': fullName,
+      if (lang != null) 'lang': lang,
+    });
+    return res.data as Map<String, dynamic>;
+  }
+
+  /// Verify a staff member's OTP. Returns `{ custom_token, success }`.
+  Future<Map<String, dynamic>> adminVerifyOtp({
+    required String phone,
+    required String code,
+  }) async {
+    final res = await _dio.post('/auth/otp/admin-verify', data: {
+      'phone': phone,
+      'code': code,
+    });
+    return res.data as Map<String, dynamic>;
+  }
+
   // ─── Menu ──────────────────────────────────────────────────
 
   Future<List<Category>> getCategories() async {
