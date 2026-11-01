@@ -44,6 +44,8 @@ class MainActivity : FlutterActivity() {
             buildChannel("order_being_prepared", "Order being prepared", "order_being_prepared"),
             buildChannel("order_ready", "Order ready", "order_ready"),
             buildChannel("order_picked_up", "Order picked up", "order_picked_up"),
+            // Staff-only: alert for every new incoming order.
+            buildChannel("new_order", "New orders", "new_order"),
         ))
     }
 }

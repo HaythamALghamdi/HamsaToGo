@@ -144,6 +144,9 @@ def notify_staff_new_order(order: dict) -> int:
                 "order_id": order.get("id", ""),
                 "type": "staff_new_order",
             },
+            android_sound="new_order",
+            android_channel_id="new_order",
+            ios_sound="NewOrderIOS.caf",
         )
         if ok:
             sent += 1
