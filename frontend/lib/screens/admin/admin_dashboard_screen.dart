@@ -9,6 +9,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/locale_provider.dart';
 import '../../providers/order_provider.dart';
 import '../../providers/settings_provider.dart';
+import '../../services/order_alarm.dart';
 import '../../widgets/lang_toggle_button.dart';
 
 class AdminDashboardScreen extends ConsumerStatefulWidget {
@@ -23,9 +24,25 @@ class _AdminDashboardScreenState
     extends ConsumerState<AdminDashboardScreen> {
 
   @override
+  void dispose() {
+    // Leaving the dashboard (logout / navigate away) silences the alarm.
+    OrderAlarm.stop();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final ordersAsync = ref.watch(activeOrdersProvider);
     final isAr = ref.watch(localeProvider).languageCode == 'ar';
+
+    // Ring the incoming-order alarm while any order is still awaiting
+    // acceptance; stop once staff move them all to preparing. Guarded inside
+    // OrderAlarm so repeated builds only act on an actual change.
+    final receivedWaiting = ordersAsync.valueOrNull
+            ?.where((o) => o.status == OrderStatus.received)
+            .length ??
+        0;
+    OrderAlarm.sync(receivedWaiting);
 
     return Scaffold(
       backgroundColor: HamsaColors.bgDeep,
