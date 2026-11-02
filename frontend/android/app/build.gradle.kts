@@ -68,3 +68,11 @@ android {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Native Firestore for the incoming-order alarm foreground service
+    // (OrderAlarmService listens directly, so it works with the app closed).
+    // BoM pinned to the same version the Flutter Firebase plugins use.
+    implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
+    implementation("com.google.firebase:firebase-firestore")
+}

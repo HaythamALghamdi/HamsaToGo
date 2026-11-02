@@ -1,41 +1,32 @@
 import 'dart:io';
 import 'package:flutter/services.dart';
 
-/// Controls the native incoming-order alarm (Android only).
+/// Controls the native incoming-order alarm service (Android only).
 ///
-/// The alarm is a foreground service that loops a sound until staff accept the
-/// order. We start it when there is at least one order still in the "received"
-/// state and stop it once they've all been moved to "preparing".
+/// The service listens to Firestore itself and rings while any order is in the
+/// "received" state — so it keeps working with the app minimized or closed. We
+/// just start it when a staff member signs in and stop it when they sign out.
 class OrderAlarm {
   static const _channel = MethodChannel('hamsa/order_alarm');
-  static bool _ringing = false;
+  static bool _active = false;
 
-  /// Start ringing if not already. No-op on iOS.
-  static Future<void> start() async {
-    if (!Platform.isAndroid || _ringing) return;
-    _ringing = true;
+  /// Start the order-listening alarm service. No-op on iOS or if already on.
+  static Future<void> startListening() async {
+    if (!Platform.isAndroid || _active) return;
+    _active = true;
     try {
       await _channel.invokeMethod('start');
     } catch (_) {
-      _ringing = false;
+      _active = false;
     }
   }
 
-  /// Stop ringing if currently ringing. No-op on iOS.
-  static Future<void> stop() async {
-    if (!Platform.isAndroid || !_ringing) return;
-    _ringing = false;
+  /// Stop the service entirely (sign-out). No-op on iOS or if already off.
+  static Future<void> stopListening() async {
+    if (!Platform.isAndroid || !_active) return;
+    _active = false;
     try {
       await _channel.invokeMethod('stop');
     } catch (_) {}
-  }
-
-  /// Ring while [receivedCount] > 0, otherwise silence.
-  static void sync(int receivedCount) {
-    if (receivedCount > 0) {
-      start();
-    } else {
-      stop();
-    }
   }
 }

@@ -71,16 +71,8 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
-        // Incoming-order alarm: the OrderAlarmService plays the looping sound
-        // itself, so this channel is SILENT (no channel sound) but high
-        // importance so the full-screen alert can wake the screen.
-        val alarm = NotificationChannel(
-            "order_alarm", "Incoming order alarm", NotificationManager.IMPORTANCE_HIGH
-        ).apply {
-            setSound(null, null)
-            enableVibration(true)
-            setBypassDnd(true) // best-effort: ring through Do Not Disturb
-        }
+        // The incoming-order alarm channels (order_listening / order_alarm) are
+        // created by OrderAlarmService, which also runs when the app is closed.
 
         manager.createNotificationChannels(listOf(
             // Default channel (system sound) — used for cancellations.
@@ -90,7 +82,6 @@ class MainActivity : FlutterActivity() {
             buildChannel("order_picked_up", "Order picked up", "order_picked_up"),
             // Staff-only: single heads-up sound for a new incoming order.
             buildChannel("new_order", "New orders", "new_order"),
-            alarm,
         ))
     }
 }

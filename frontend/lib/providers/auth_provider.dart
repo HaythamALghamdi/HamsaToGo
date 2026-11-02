@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import '../services/api_service.dart';
 import '../services/fcm_service.dart';
+import '../services/order_alarm.dart';
 import '../core/constants.dart';
 
 final apiServiceProvider = Provider<ApiService>((ref) => ApiService());
@@ -82,6 +83,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
         state = const AuthState(isAdmin: true);
         // Re-register the device for new-order alerts (tokens rotate).
         FcmService.registerStaffToken(_api);
+        // Resume the incoming-order alarm service for this staff session.
+        OrderAlarm.startListening();
         return;
       }
       if (userId != null && fbUser != null) {
@@ -158,6 +161,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       await _storage.write(key: StorageKeys.isAdmin, value: 'true');
       state = const AuthState(isAdmin: true);
       FcmService.registerStaffToken(_api);
+      OrderAlarm.startListening();
       return true;
     } catch (e) {
       state = state.copyWith(isLoading: false, error: _parseError(e));
@@ -176,6 +180,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
         state = const AuthState(isAdmin: true);
         // Register this device for new-order push alerts.
         FcmService.registerStaffToken(_api);
+        OrderAlarm.startListening();
         return true;
       } else {
         state = state.copyWith(isLoading: false, error: 'Not authorized');
@@ -206,6 +211,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   Future<void> logout() async {
+    // Stop the staff order-alarm service before clearing the session (the
+    // native Firestore listener would otherwise lose its auth and error).
+    OrderAlarm.stopListening();
     // Clear the Firebase session too — otherwise it leaks into the next login
     // (e.g. switching between a customer and staff on the same device), and
     // Firestore security rules would run against the wrong user's token.
